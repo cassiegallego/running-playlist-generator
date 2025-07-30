@@ -1,109 +1,150 @@
 import streamlit as st
-import random
+import requests
+import base64
+import math
+import re
 
-# --- Song database (mock) ---
-SONG_DB = [
-    {"title": "Lose Yourself", "artist": "Eminem", "bpm": 171, "genre": "Hip-Hop", "duration": 4.5,
-     "spotify": "https://open.spotify.com/track/1", "apple": "https://music.apple.com/track/1"},
-    {"title": "Blinding Lights", "artist": "The Weeknd", "bpm": 173, "genre": "Pop", "duration": 3.2,
-     "spotify": "https://open.spotify.com/track/2", "apple": "https://music.apple.com/track/2"},
-    {"title": "Sandstorm", "artist": "Darude", "bpm": 136, "genre": "EDM", "duration": 3.8,
-     "spotify": "https://open.spotify.com/track/3", "apple": "https://music.apple.com/track/3"},
-    {"title": "Levels", "artist": "Avicii", "bpm": 126, "genre": "EDM", "duration": 5.0,
-     "spotify": "https://open.spotify.com/track/4", "apple": "https://music.apple.com/track/4"},
-    {"title": "HUMBLE.", "artist": "Kendrick Lamar", "bpm": 150, "genre": "Hip-Hop", "duration": 2.9,
-     "spotify": "https://open.spotify.com/track/5", "apple": "https://music.apple.com/track/5"},
-]
+# --- Spotify API Auth (Client Credentials Flow) ---
+CLIENT_ID = st.secrets["SPOTIFY_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["SPOTIFY_CLIENT_SECRET"]
 
+@st.cache_data(show_spinner=False)
+def get_spotify_token():
+    auth_url = "https://accounts.spotify.com/api/token"
+    auth_header = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth_header}"}
+    data = {"grant_type": "client_credentials"}
+    resp = requests.post(auth_url, headers=headers, data=data)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+token = get_spotify_token()
+SPOTIFY_HEADERS = {"Authorization": f"Bearer {token}"}
+
+# --- Constants ---
 STEP_TYPES = [
     "Warmup", "Recovery", "Interval - Tempo", "Interval - Threshold",
     "Interval - VO2max", "Cooldown", "Easy Run", "Race"
 ]
-
 DEFAULT_GENRES = [
-    "Pop", "EDM", "Hip-Hop", "Rock", "Indie", "Country",
-    "Reggaeton", "Dancehall", "Instrumental", "Classical",
-    "Latin", "Lo-fi", "House", "Jazz", "Afrobeat"
+    "pop", "edm", "hip-hop", "rock", "indie", "country",
+    "reggaeton", "dancehall", "instrumental", "classical",
+    "latin", "lo-fi", "house", "jazz", "afrobeat"
 ]
 
-# --- App Title ---
-st.title("🎧 Custom Running Playlist Generator")
+# --- Helper: iTunes Search for Apple Music Link ---
+@st.cache_data(show_spinner=False)
+def fetch_apple_link(track_name, artist_name):
+    itunes_url = "https://itunes.apple.com/search"
+    params = {
+        "term": f"{track_name} {artist_name}",
+        "media": "music",
+        "limit": 1,
+    }
+    r = requests.get(itunes_url, params=params)
+    if r.ok:
+        results = r.json().get("results")
+        if results:
+            return results[0].get("trackViewUrl")
+    return None
 
-# --- Genre Selection ---
-genres_selected = st.multiselect("Select your preferred music genres:", DEFAULT_GENRES)
-custom_genre = st.text_input("Want to add a custom genre?")
-if custom_genre:
-    genres_selected.append(custom_genre)
+# --- Streamlit UI ---
+st.title("🎵 Running Playlist Generator (v2)")
 
-# --- Mode Toggle ---
-mode = st.radio("How would you like to enter your workout?", ["Form", "Paste"])
+# Genres
+genres = st.multiselect("Select genres:", DEFAULT_GENRES)
+custom = st.text_input("Add custom genre (Spotify may or may not support it):")
+if custom:
+    genres.append(custom.lower())
 
+# Mode
+mode = st.radio("Enter workout via:", ["Form", "Paste"])
 steps = []
 
-# --- FORM MODE ---
+# Form Mode
 if mode == "Form":
-    if "step_count" not in st.session_state:
-        st.session_state.step_count = 1
+    if "n_steps" not in st.session_state:
+        st.session_state.n_steps = 1
 
-    st.subheader("🏃 Workout Steps")
-    for i in range(st.session_state.step_count):
-        st.markdown(f"### Step {i + 1}")
-        step_type = st.selectbox(f"Step {i + 1} type:", STEP_TYPES, key=f"type_{i}")
-        duration = st.number_input(f"Duration (min)", min_value=1, max_value=180, key=f"duration_{i}")
-        hr_min = st.number_input(f"HR Min", min_value=60, max_value=200, key=f"hr_min_{i}")
-        hr_max = st.number_input(f"HR Max", min_value=hr_min, max_value=210, key=f"hr_max_{i}")
-        steps.append({
-            "step": step_type,
-            "duration": duration,
-            "hr_min": hr_min,
-            "hr_max": hr_max
-        })
-
+    st.subheader("🏃 Build Your Workout")
+    for i in range(st.session_state.n_steps):
+        st.markdown(f"**Step {i+1}**")
+        step = st.selectbox(f"Type:", STEP_TYPES, key=f"type{i}")
+        dur = st.number_input("Duration (min):", min_value=1, max_value=300, key=f"dur{i}")
+        hr_min = st.number_input("HR ⩾", min_value=40, max_value=200, key=f"hrmin{i}")
+        hr_max = st.number_input("HR ⩽", min_value=hr_min, max_value=220, key=f"hrmax{i}")
+        steps.append({"step": step, "duration": dur, "hr_min": hr_min, "hr_max": hr_max})
     if st.button("➕ Add another step"):
-        st.session_state.step_count += 1
+        st.session_state.n_steps += 1
 
-# --- PASTE MODE ---
-elif mode == "Paste":
-    st.subheader("📋 Paste Your Workout Steps")
-    pasted_text = st.text_area("Paste your workout steps here (format: Step Type – Duration – HR Min–Max):", height=200)
+# Paste Mode
+else:
+    st.subheader("📋 Paste Your Workout")
+    text = st.text_area("E.g.:\n\nWarm up\nHR 112 - 150 bpm\n10 min\n\nInterval - Tempo\nHR 154 - 165 bpm\n4 min\n…")
+    if text:
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        cur = {}
+        for l in lines:
+            # Step name
+            if re.match(r'^[A-Za-z].*$', l) and "hr" not in l.lower() and "min" not in l.lower():
+                if all(k in cur for k in ("step","duration","hr_min","hr_max")):
+                    steps.append(cur)
+                cur = {"step": l}
+            # HR line
+            elif "hr" in l.lower():
+                m = re.search(r'(\d+)\s*-\s*(\d+)', l)
+                if m:
+                    cur["hr_min"], cur["hr_max"] = int(m.group(1)), int(m.group(2))
+            # Duration line
+            elif "min" in l.lower():
+                m = re.search(r'(\d+)\s*min', l.lower())
+                if m:
+                    cur["duration"] = int(m.group(1))
+        if all(k in cur for k in ("step","duration","hr_min","hr_max")):
+            steps.append(cur)
+        if not steps:
+            st.warning("Couldn't parse any steps—check formatting.")
 
-    if pasted_text:
-        for line in pasted_text.splitlines():
-            try:
-                parts = [p.strip() for p in line.split("–")]
-                step = parts[0]
-                duration = int(parts[1].split()[0])
-                hr_range = [int(n) for n in parts[2].replace("HR", "").strip().split("–")]
-                steps.append({
-                    "step": step,
-                    "duration": duration,
-                    "hr_min": hr_range[0],
-                    "hr_max": hr_range[1]
-                })
-            except Exception as e:
-                st.error(f"Error parsing line: `{line}` – {e}")
+# Generate Playlist
+if steps and st.button("🎶 Generate Playlist"):
+    st.subheader("📃 Your Playlist")
 
-# --- Playlist Generator ---
-if steps and st.button("🎵 Generate Playlist"):
-    st.subheader("📃 Playlist")
-    playlist = []
-    for idx, step in enumerate(steps):
-        st.markdown(f"#### {step['step']} ({step['duration']} min | HR: {step['hr_min']}-{step['hr_max']})")
-        bpm_range = (step["hr_min"], step["hr_max"])
-        candidates = [s for s in SONG_DB if bpm_range[0] <= s["bpm"] <= bpm_range[1] and s["genre"] in genres_selected]
+    for s in steps:
+        st.markdown(f"**{s['step']}** — {s['duration']} min @ HR {s['hr_min']}–{s['hr_max']}")
+        # Estimate # tracks
+        n = math.ceil(s["duration"] / 3.5)
 
-        total_time = 0
-        step_playlist = []
-        while total_time < step["duration"] and candidates:
-            song = random.choice(candidates)
-            if total_time + song["duration"] > step["duration"] + 0.5:
-                break
-            step_playlist.append(song)
-            total_time += song["duration"]
-            playlist.append(song)
+        # Build Recommendation query
+        rec_url = "https://api.spotify.com/v1/recommendations"
+        params = {
+            "limit": n,
+            "min_tempo": s["hr_min"],
+            "max_tempo": s["hr_max"],
+            "seed_genres": ",".join(genres[:5])  # max 5 seeds
+        }
+        r = requests.get(rec_url, headers=SPOTIFY_HEADERS, params=params)
+        if not r.ok:
+            st.error(f"Spotify error: {r.text}")
+            continue
 
-        for song in step_playlist:
-            st.markdown(f"- **{song['title']}** by *{song['artist']}*  \n"
-                        f"[Spotify]({song['spotify']}) | [Apple Music]({song['apple']})")
+        tracks = r.json().get("tracks", [])
+        if not tracks:
+            st.info("No tracks found for these parameters.")
+            continue
 
-    st.success("Playlist created! 🎶 Copy the links to listen during your workout.")
+        for t in tracks:
+            title = t["name"]
+            artist = t["artists"][0]["name"]
+            spotify_url = t["external_urls"]["spotify"]
+            preview = t.get("preview_url")
+            apple = fetch_apple_link(title, artist)
+
+            line = f"- **{title}** by *{artist}*  \n"
+            line += f"[Spotify]({spotify_url})"
+            if preview:
+                line += f" | [Preview]({preview})"
+            if apple:
+                line += f" | [Apple Music]({apple})"
+            st.markdown(line)
+
+    st.success("Done! Enjoy your run. 🏃‍♀️🎵")

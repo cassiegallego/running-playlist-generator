@@ -1,8 +1,7 @@
 import streamlit as st
 import random
 
-# --- Mock song database ---
-# Replace or expand this with a real dataset or Spotify API later
+# --- Song database (mock) ---
 SONG_DB = [
     {"title": "Lose Yourself", "artist": "Eminem", "bpm": 171, "genre": "Hip-Hop", "duration": 4.5,
      "spotify": "https://open.spotify.com/track/1", "apple": "https://music.apple.com/track/1"},
@@ -14,52 +13,43 @@ SONG_DB = [
      "spotify": "https://open.spotify.com/track/4", "apple": "https://music.apple.com/track/4"},
     {"title": "HUMBLE.", "artist": "Kendrick Lamar", "bpm": 150, "genre": "Hip-Hop", "duration": 2.9,
      "spotify": "https://open.spotify.com/track/5", "apple": "https://music.apple.com/track/5"},
-    # Add more songs as needed
 ]
 
-# --- HR Zone to BPM Map ---
-ZONE_BPM_MAP = {
-    "Z1-Z2": (120, 135),
-    "Z3": (140, 160),
-    "Z4": (160, 180),
-    "Z5": (180, 200),
-}
-
-# --- Step Types for Dropdown ---
 STEP_TYPES = [
     "Warmup", "Recovery", "Interval - Tempo", "Interval - Threshold",
     "Interval - VO2max", "Cooldown", "Easy Run", "Race"
 ]
 
-# --- Genre options ---
 DEFAULT_GENRES = [
     "Pop", "EDM", "Hip-Hop", "Rock", "Indie", "Country",
     "Reggaeton", "Dancehall", "Instrumental", "Classical",
     "Latin", "Lo-fi", "House", "Jazz", "Afrobeat"
 ]
 
-# --- Streamlit App ---
-st.title("🎵 Custom Running Playlist Generator")
-
-st.markdown("Enter your workout steps and preferred music genres. We'll build a playlist that matches each step’s heart rate zone and duration.")
+# --- App Title ---
+st.title("🎧 Custom Running Playlist Generator")
 
 # --- Genre Selection ---
 genres_selected = st.multiselect("Select your preferred music genres:", DEFAULT_GENRES)
-
 custom_genre = st.text_input("Want to add a custom genre?")
 if custom_genre:
     genres_selected.append(custom_genre)
 
-# --- Workout Input ---
-st.subheader("🏃‍♀️ Workout Steps")
+# --- Mode Toggle ---
+mode = st.radio("How would you like to enter your workout?", ["Form", "Paste"])
 
 steps = []
-with st.form("workout_form"):
-    num_steps = st.number_input("How many steps in your workout?", min_value=1, max_value=20, value=3)
-    for i in range(int(num_steps)):
-        st.markdown(f"### Step {i+1}")
-        step_type = st.selectbox(f"Step {i+1} type:", STEP_TYPES, key=f"type_{i}")
-        duration = st.number_input(f"Duration (in minutes)", min_value=1, max_value=180, key=f"duration_{i}")
+
+# --- FORM MODE ---
+if mode == "Form":
+    if "step_count" not in st.session_state:
+        st.session_state.step_count = 1
+
+    st.subheader("🏃 Workout Steps")
+    for i in range(st.session_state.step_count):
+        st.markdown(f"### Step {i + 1}")
+        step_type = st.selectbox(f"Step {i + 1} type:", STEP_TYPES, key=f"type_{i}")
+        duration = st.number_input(f"Duration (min)", min_value=1, max_value=180, key=f"duration_{i}")
         hr_min = st.number_input(f"HR Min", min_value=60, max_value=200, key=f"hr_min_{i}")
         hr_max = st.number_input(f"HR Max", min_value=hr_min, max_value=210, key=f"hr_max_{i}")
         steps.append({
@@ -68,19 +58,39 @@ with st.form("workout_form"):
             "hr_min": hr_min,
             "hr_max": hr_max
         })
-    submitted = st.form_submit_button("Generate Playlist")
 
-# --- Generate Playlist ---
-if submitted:
-    st.subheader("🎧 Your Step-Aligned Playlist")
+    if st.button("➕ Add another step"):
+        st.session_state.step_count += 1
+
+# --- PASTE MODE ---
+elif mode == "Paste":
+    st.subheader("📋 Paste Your Workout Steps")
+    pasted_text = st.text_area("Paste your workout steps here (format: Step Type – Duration – HR Min–Max):", height=200)
+
+    if pasted_text:
+        for line in pasted_text.splitlines():
+            try:
+                parts = [p.strip() for p in line.split("–")]
+                step = parts[0]
+                duration = int(parts[1].split()[0])
+                hr_range = [int(n) for n in parts[2].replace("HR", "").strip().split("–")]
+                steps.append({
+                    "step": step,
+                    "duration": duration,
+                    "hr_min": hr_range[0],
+                    "hr_max": hr_range[1]
+                })
+            except Exception as e:
+                st.error(f"Error parsing line: `{line}` – {e}")
+
+# --- Playlist Generator ---
+if steps and st.button("🎵 Generate Playlist"):
+    st.subheader("📃 Playlist")
     playlist = []
     for idx, step in enumerate(steps):
         st.markdown(f"#### {step['step']} ({step['duration']} min | HR: {step['hr_min']}-{step['hr_max']})")
-
-        # Filter songs matching BPM and genres
-        bpm_range = (step['hr_min'], step['hr_max'])
-        candidates = [s for s in SONG_DB if
-                      bpm_range[0] <= s["bpm"] <= bpm_range[1] and s["genre"] in genres_selected]
+        bpm_range = (step["hr_min"], step["hr_max"])
+        candidates = [s for s in SONG_DB if bpm_range[0] <= s["bpm"] <= bpm_range[1] and s["genre"] in genres_selected]
 
         total_time = 0
         step_playlist = []
@@ -96,5 +106,4 @@ if submitted:
             st.markdown(f"- **{song['title']}** by *{song['artist']}*  \n"
                         f"[Spotify]({song['spotify']}) | [Apple Music]({song['apple']})")
 
-    st.success("Playlist complete! 🎶 Copy the links above to listen during your run.")
-
+    st.success("Playlist created! 🎶 Copy the links to listen during your workout.")

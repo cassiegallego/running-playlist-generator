@@ -78,10 +78,25 @@ if mode=="Form":
                                      key=f"type_{i}")
             s["duration"] = st.number_input("Duration (min)", min_value=1, max_value=300,
                                             value=s["duration"], key=f"dur_{i}")
-            s["hr_min"] = st.number_input("HR ≥", min_value=40, max_value=200,
-                                          value=s["hr_min"], key=f"hrmin_{i}")
-            s["hr_max"] = st.number_input("HR ≤", min_value=s["hr_min"], max_value=220,
-                                          value=s["hr_max"], key=f"hrmax_{i}")
+           # HR Min input
+new_hr_min = st.number_input(
+    "HR ≥", min_value=40, max_value=200,
+    value=s.get("hr_min", 60),
+    key=f"hrmin_{i}"
+)
+# Clamp previous hr_max to at least new_hr_min
+old_hr_max = s.get("hr_max", new_hr_min)
+default_hr_max = max(old_hr_max, new_hr_min)
+
+# HR Max input (ensuring value ≥ new_hr_min)
+new_hr_max = st.number_input(
+    "HR ≤", min_value=new_hr_min, max_value=220,
+    value=default_hr_max,
+    key=f"hrmax_{i}"
+)
+
+s["hr_min"], s["hr_max"] = new_hr_min, new_hr_max
+
         with cols[1]:
             if st.button("📄 Copy", key=f"copy_{i}"):
                 # duplicate this step immediately after
